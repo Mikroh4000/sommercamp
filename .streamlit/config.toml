@@ -1,5 +1,5 @@
 [server]
-port = 8501
+port = 8080
 headless = false
 runOnSave = true
 folderWatchBlacklist = [".scrapy"]
@@ -9,7 +9,7 @@ toolbarMode = "minimal"
 
 [browser]
 serverAddress = "localhost"
-serverPort = 8501
+serverPort = 8080
 gatherUsageStats = false
 
 [ui]

@@ -8,12 +8,24 @@ from pyterrier import started, init
 # um alle seine Bestandteile importieren zu können.
 if not started():
     init()
-from pyterrier import IndexFactory
+from pyterrier import IndexFactory, apply
 from pyterrier.batchretrieve import BatchRetrieve
-from pyterrier.text import get_text, snippets
+from pyterrier.terrier import Retriever
+from pyterrier.text import get_text, snippets, sliding, scorer
+import pandas as pd
 
 def num_results():
     session_state.num_results += 10
+
+
+def _fn(iterdict):
+    ret = []
+    for index, result in iterdict.iterrows():
+        result = result.to_dict()
+        result["docno"] = str(index)
+        ret += [result]
+    return pd.DataFrame(ret)
+
 
 # Diese Funktion baut die App für die Suche im gegebenen Index auf.
 def app(index_dir) -> None:
@@ -45,17 +57,21 @@ def app(index_dir) -> None:
     # Öffne den Index.
     index = IndexFactory.of(abspath(index_dir))
     # Initialisiere den Such-Algorithmus. 
-    searcher = BatchRetrieve(
-        index,
-        wmodel="BM25",
-        num_results=session_state.num_results,
-    )
+    br = Retriever(index, wmodel="BM25", num_results=session_state.num_results)
+
     # Initialisiere das Modul, zum Abrufen der Texte.
-    text_getter = get_text(index, metadata=["url", "title", "text"]) #################################################################
+    text_getter = get_text(index, metadata=["text", "url", "title"])
     # Baue die Such-Pipeline zusammen.
-    pipeline = searcher >> text_getter
+    # pipeline = searcher >> text_getter
+
+    sliding_text = sliding(text_attr="text", prepend_title=False, length=50, stride=25)
+
+    snippet_pipeline = br >> text_getter >> apply.generic(_fn)\
+        >> sliding_text >> scorer(wmodel="Tf", body_attr="text")
     # Führe die Such-Pipeline aus und suche nach der Suchanfrage.
-    results = pipeline.search(query)
+    results = snippet_pipeline.search(query)
+
+
 
     # Zeige eine Unter-Überschrift vor den Suchergebnissen an.
     divider()
@@ -66,23 +82,45 @@ def app(index_dir) -> None:
         markdown("Keine Suchergebnisse.")
         return
 
-    # Wenn es Suchergebnisse gibt, dann zeige an, wie viele.
-    markdown(f"{len(results)} Suchergebnisse.")
-    for _, row in results.iterrows():
-        # Pro Suchergebnis, erstelle eine Box (container).
+    unique_docnos = set(docno.split('%')[0] for docno in results['docno'])
+    print(unique_docnos)
+    markdown(f"{len(unique_docnos)} Suchergebnisse.")
+    covered_ids = set()
+
+    for _, i in snippet_pipeline.search(query)\
+            .sort_values("score", ascending=False).iterrows():
         with container(border=True):
-            # Zeige den Titel der gefundenen Webseite an.
-            subheader(row["title"])
-            # Speichere den Text in einer Variablen (text).
-            text = row["text"]
-            # Schneide den Text nach 500 Zeichen ab.
-            text = text[:500]
-            # Ersetze Zeilenumbrüche durch Leerzeichen.
-            text = text.replace("\n", " ")
-            # Zeige den Dokument-Text an.
-            markdown(text)
-            # Gib Nutzern eine Schaltfläche, um die Seite zu öffnen.
-            link_button("Seite öffnen", url=row["url"])
+            docno = i["docno"].split("%")[0]
+            if docno not in covered_ids:
+                covered_ids.add(docno)
+                subheader(i["title"])
+                text = i["text"]
+                # Schneide den Text nach 500 Zeichen ab.
+                text = text[:500]
+                # Ersetze Zeilenumbrüche durch Leerzeichen.
+                text = text.replace("\n", " ")
+                # Zeige den Dokument-Text an.
+                markdown(text)
+                # Gib Nutzern eine Schaltfläche, um die Seite zu öffnen.
+                link_button("Seite öffnen", url=i["url"])
+
+    # for _, row in results.iterrows():
+    #     print("\n\n\n")
+    #     print(row)
+    #     # Pro Suchergebnis, erstelle eine Box (container).
+    #     with container(border=True):
+    #         # Zeige den Titel der gefundenen Webseite an.
+    #         #subheader(row["title"])
+    #         # Speichere den Text in einer Variablen (text).
+    #         text = row["text"]
+    #         # Schneide den Text nach 500 Zeichen ab.
+    #         text = text[:500]
+    #         # Ersetze Zeilenumbrüche durch Leerzeichen.
+    #         text = text.replace("\n", " ")
+    #         # Zeige den Dokument-Text an.
+    #         markdown(text)
+    #         # Gib Nutzern eine Schaltfläche, um die Seite zu öffnen.
+    #         link_button("Seite öffnen", url=row["url"])
 
     button("zeig mir bitte mehr :-)", on_click=num_results)
 
